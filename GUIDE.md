@@ -161,7 +161,7 @@ on GitHub and watch these three jobs run.
 ## 7. Secrets Management (§5.5)
 
 **(a) Never commit secrets** — already handled: `OPENWEATHER_API_KEY` only
-ever lives in `backend/.env`, which is gitignored.
+ever lives in `backend/.env`, which is gitignored.    
 
 **(b) Store real values in GitHub Secrets:**
 
