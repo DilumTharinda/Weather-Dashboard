@@ -1,5 +1,9 @@
 name: CI
 
+permissions:
+  contents: read
+  pull-requests: write
+
 on:
   pull_request:
     branches: [dev, staging, main]
@@ -10,54 +14,33 @@ jobs:
   backend-test:
     name: Backend Tests
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup and install
+        uses: ./.github/workflows/actions/setup
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: backend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
+          working-directory: backend
 
       - name: Run tests
+        working-directory: backend
         run: npm test
         env:
           OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
 
-      - name: Prove the secret is consumed but never printed
-        env:
-          OPENWEATHER_API_KEY: ${{ secrets.OPENWEATHER_API_KEY }}
-        run: |
-          echo "A secret is configured: $([ -n \"$OPENWEATHER_API_KEY\" ] && echo yes || echo no)"
-          echo "GitHub automatically masks the raw secret value in these logs."
-
   frontend-build:
     name: Frontend Build
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Setup and install
+        uses: ./.github/workflows/actions/setup
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: frontend/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
+          working-directory: frontend
 
       - name: Build
+        working-directory: frontend
         run: npm run build
 
   secret-scan:
@@ -72,3 +55,68 @@ jobs:
         uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  report:
+    name: CI Status Report
+    runs-on: ubuntu-latest
+    needs: [backend-test, frontend-build, secret-scan]
+    if: always()
+    steps:
+      - name: Write summary
+        run: |
+          echo "## Weather Dashboard CI Status Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| Backend Tests | ${{ needs.backend-test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Frontend Build | ${{ needs.frontend-build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Secret Scanning | ${{ needs.secret-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Post PR comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const backend = "${{ needs.backend-test.result }}";
+            const frontend = "${{ needs.frontend-build.result }}";
+            const secretScan = "${{ needs.secret-scan.result }}";
+
+            const icon = (r) => r === "success" ? "✅ Passed" : (r === "failure" ? "❌ Failed" : "⏭️ Skipped");
+            const overall = (backend === "success" && frontend === "success" && secretScan === "success") ? "✅ Passed" : "❌ Failed";
+
+            const body = `## 🚀 Weather Dashboard CI Status Report
+
+            | Check | Result |
+            |---|---|
+            | Backend Tests | ${icon(backend)} |
+            | Frontend Build | ${icon(frontend)} |
+            | Secret Scanning | ${icon(secretScan)} |
+
+            **Overall Pipeline Status:** ${overall}
+            Commit: \`${context.sha.substring(0, 7)}\``;
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number
+            });
+
+            const existing = comments.find(
+              c => c.user.type === "Bot" && c.body.includes("Weather Dashboard CI Status Report")
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body
+              });
+            }
